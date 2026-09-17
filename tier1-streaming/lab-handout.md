@@ -285,7 +285,54 @@ layer does, or is it describing what it assumes you did?
 
 ---
 
+## After the lab - turn this session into a repeatable skill
+
+Everything above you did once, by hand, in one session. The next stream that needs onboarding
+should not cost you the same five steps. CoCo can read this session back and package what you
+just worked out into a **skill**: a set of standards plus a prompt template that any engineer on
+your team invokes by name.
+
+Do this in the **same session** you just ran the lab in, so CoCo still has the transcript, the
+producer code, and the checks you actually used.
+
+Invoke the skill that builds skills:
+
+```
+/skill-development
+```
+
+Then tell it what to capture:
+
+> "Summarize what we did in this session and turn it into a reusable skill called
+> `onboard-streaming-source`. Capture as standards, not as a narrative of what we did:
+> - the producer seam - a stubbed consume function behind a `--source` flag, with everything
+>   downstream source-agnostic
+> - the metadata columns every landing table carries (`CHANNEL_ID`, `STREAM_OFFSET`,
+>   `PARTITION_KEY`, `ARRIVAL_TS`) and why
+> - the VARIANT-as-native-dict rule, with the `TYPEOF(PAYLOAD) = 'VARCHAR'` check that catches
+>   the violation
+> - the silver dedupe on `(CHANNEL_ID, STREAM_OFFSET)` via QUALIFY ROW_NUMBER()
+> - the timestamp standardization to a single `EVENT_TS_UTC`
+> - the per-shard sequence gap query as a mandatory completeness gate
+> - idempotent DDL and comments on every object
+> Include a prompt template - 'onboard this stream following our standards' - and the
+> verification queries as gates the skill runs rather than suggestions it makes."
+
+Read the result the same way you read everything else today. Two things to check:
+
+- Is it a **standard** or a **transcript**? If it describes what happened in this lab rather than
+  what the next stream must do, send it back.
+- Are the checks gates or advice? A skill that suggests running the gap query is worth much less
+  than one that will not report success until the query returns zero rows.
+
+Then use it on something real: point it at a stream you own and see what it produces before you
+trust it. Using the skill and gating the agent as it works is the **Skills** tier; hardening the
+skill and putting CI/CD around it is **Build Your Own**.
+
+---
+
 ## Reference
+
 
 **Envelope fields** in `sample_kinesis_records.jsonl`:
 
