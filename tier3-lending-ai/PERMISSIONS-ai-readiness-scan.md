@@ -1,6 +1,6 @@
 # Snowflake permissions for the AI readiness scan
 
-**For:** Parekh and the LendingTree Snowflake admin team
+**For:** Snowflake admin team
 **Purpose:** set up one role, before the workshop, that can run Snowflake's AI readiness scan against the LendingTree account. ACCOUNTADMIN is not required to run the scan. An ACCOUNTADMIN only has to run the grant script below once.
 
 ## What the scan does
