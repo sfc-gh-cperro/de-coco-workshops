@@ -4,7 +4,7 @@ This guide is for walking through the AI readiness improvment loop. It walks thr
 
 ## Why this matters
 
-AI agents and natural-language tools (Cortex Analyst, Snowflake Intelligence, the "Lenny Brain" end state) only give trustworthy answers when the data underneath is modeled the way the business asks questions, and described well enough that an agent can find and use it. When that foundation is missing, people and agents fall back to raw tables. They get inconsistent numbers, duplicate logic, and access that is hard to govern.
+AI agents and natural-language tools (Cortex Analyst, Snowflake Intelligence) only give trustworthy answers when the data underneath is modeled the way the business asks questions, and described well enough that an agent can find and use it. When that foundation is missing, people and agents fall back to raw tables. They get inconsistent numbers, duplicate logic, and access that is hard to govern.
 
 AI readiness is a way to measure that foundation from how your account is actually used, so the next modeling investment goes where the demand is.
 
