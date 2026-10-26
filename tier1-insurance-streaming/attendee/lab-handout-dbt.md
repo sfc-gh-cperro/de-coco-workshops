@@ -19,7 +19,7 @@ lifecycle of events from different services, keyed by `quote_id`: the request (a
 vehicles, drivers, coverage asks), one response per carrier, a selection, and then either a bound
 policy or an abandonment.
 
-You are given `sample_quote_events.jsonl`: records exactly as a consumer reads them off the bus. A
+You are given `sample_quote_events.jsonl`, in the same folder as this handout: records exactly as a consumer reads them off the bus. A
 small envelope (`event_id`, `source`, `partition`, `offset`, `published_at`) wraps a nested JSON
 `payload`. Expect realistic mess; finding it is your first job.
 
@@ -128,12 +128,15 @@ Two things that cost people time here:
 
 - `SNOWFLAKE_ACCOUNT` must be the **org-qualified identifier** (`MYORG-MYACCOUNT`), not the
   account locator that `CURRENT_ACCOUNT()` returns. Get it with
-  `SELECT CURRENT_ORGANIZATION_NAME(), CURRENT_ACCOUNT_NAME();`
+  `SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME();`
 - The SDK authenticates with a **personal access token** restricted to your lab role. Your
   facilitator will give you one. There is no key pair to generate and no `profile.json` to
   distribute.
 
-Connect Cortex Code to the account (OAuth) as normal.
+Connect Cortex Code to the account (OAuth), set its role to `LAB_ATTENDEE_<n>` and its warehouse
+to `NORTHPOINT_LAB_WH`, and open the folder that holds `sample_quote_events.jsonl`. Ask CoCo to run
+`SELECT CURRENT_ROLE(), CURRENT_SCHEMA();` and confirm both before step 2.1. Anything CoCo creates
+under another role will be owned by that role, and later steps will fail on it.
 
 **Workspace check.** In Snowsight, open Projects, then Workspaces, and confirm you can create a
 Workspace. This path is authored there. If you cannot create one, tell your facilitator now.
@@ -142,11 +145,13 @@ Workspace. This path is authored there. If you cannot create one, tell your faci
 
 ## 2. The lab
 
+Before you paste any prompt, replace every `<n>` with your attendee number. CoCo will not guess it.
+
 ### Step 2.1 - Assess the payload
 
 Prompt CoCo:
 
-> "Read `sample_quote_events.jsonl`. It is a sample of records as a consumer reads them off our
+> "Read `./sample_quote_events.jsonl`. It is a sample of records as a consumer reads them off our
 > event bus. Tell me: how many records, what the envelope fields are, what distinct event types
 > are in the payload, the field inventory per event type including nested objects and arrays,
 > which fields are candidate keys, and every data-quality problem you can see. Don't load
@@ -178,8 +183,13 @@ Have a reason.
 > - Land `partition` as `CHANNEL_ID` (as `p0` to `p3`) and `offset` as `STREAM_OFFSET`, and pass
 >   the offsets as the channel's offset tokens. Keep `event_id`, `source`, and `published_at`.
 > - Land the payload into a VARIANT column as a **native dict**, not a JSON string.
-> - Batch appends. Authenticate with a PAT via inline `properties`, no profile file. Print each
->   channel's `rows_error_count` at the end."
+> - Required CLI flags `--database` and `--schema`, and `--file` defaulting to
+>   `sample_quote_events.jsonl`.
+> - On open, read each channel's latest committed offset token and skip records at or below it,
+>   so a rerun appends nothing.
+> - Batch appends. Authenticate with a PAT via inline `properties`, no profile file. Before
+>   exiting, wait for each channel to commit the highest offset it sent, not the last one sent.
+>   Print each channel's `rows_error_count` at the end."
 
 Verify by reading, not running:
 
@@ -187,14 +197,17 @@ Verify by reading, not running:
 - Both source functions yield the same keys.
 - What is the channel keyed on? Ask yourself why that choice matters for ordering.
 - Channel names are deterministic (`quotes-p0` to `quotes-p3`), so a restart reuses the channel
-  instead of orphaning it.
+  instead of orphaning it. Reusing the channel is not enough on its own: check that the producer
+  resumes from the committed offset token, or a restart re-sends everything.
 - How is the payload assigned: a dict, or a string? Note it; step 2.3 checks it.
 
 ### Step 2.3 - Land the RAW layer
 
-> "Create the target table `RAW_QUOTE_EVENTS` with columns CHANNEL_ID, STREAM_OFFSET, EVENT_ID,
-> SOURCE, PUBLISHED_AT, PAYLOAD. PAYLOAD is a VARIANT. Add table and column comments. Then run
-> the producer against my schema and verify the load."
+> "Create the target table `RAW_QUOTE_EVENTS` with columns CHANNEL_ID VARCHAR, STREAM_OFFSET
+> NUMBER, EVENT_ID VARCHAR, SOURCE VARCHAR, PUBLISHED_AT TIMESTAMP_TZ, and PAYLOAD VARIANT. Add
+> table and column comments. The producer's row keys must match these column names exactly,
+> because the default pipe maps by name. Then give me the command to run the producer against my
+> schema. Do not run it yourself."
 
 No `CREATE PIPE` is needed. The **default pipe** (`RAW_QUOTE_EVENTS-STREAMING`) is created
 automatically on first use.
@@ -227,8 +240,12 @@ match `total_rows` and `payload_varchar` must be zero. Compare `total_rows` with
 `distinct_offsets` against what you found in 2.1. Do not trust the channel status counters for
 row counts; confirm with `COUNT(*)` against the table.
 
-Question for your pair: did 2.1 find more than one event version? If so, what did you have to change
-in RAW to accept them?
+Now run the producer a second time and repeat the query a minute later. `total_rows` must not
+change. If it doubles, the producer is not resuming from its committed offsets; fix that before
+you move on. The second run reports success either way, which is the point of checking.
+
+Question for your pair: did 2.1 find more than one event version? If so, why did RAW not need to
+change to accept them?
 
 ### Break
 
@@ -250,6 +267,16 @@ directly. Keep the names exactly as shown.
 
 No dbt packages in this lab: packages need `dbt deps`, which needs an external access
 integration nobody has set up. Use dbt built-in tests and singular SQL tests only.
+
+Use these exact column names wherever they apply. The verify queries in step 2.5 depend on them,
+and CoCo has not seen step 2.5:
+
+| Object | Required columns |
+|---|---|
+| `STG_QUOTE_EVENTS` | `CHANNEL_ID`, `STREAM_OFFSET`, `EVENT_TYPE`, `EVENT_VERSION`, `QUOTE_ID`, `EVENT_TS_UTC`, `PUBLISHED_AT_UTC`, `PAYLOAD` |
+| `SILVER_QUOTE` | `QUOTE_ID`, `QUOTE_STATUS`, `APPLICANT_ID`, `APPLICANT_KNOWN_AT_REQUEST`, `BOUND_PREMIUM_ANNUAL` |
+| `SILVER_CARRIER_QUOTE` | `QUOTE_ID`, `TERM`, `TERM_PREMIUM`, `ANNUAL_PREMIUM` |
+| `SILVER_QUOTE_VEHICLE`, `SILVER_QUOTE_DRIVER` | `QUOTE_ID` |
 
 **Step 2.4.1 - scaffold the project in your Workspace.**
 
@@ -273,7 +300,8 @@ Verify by reading:
 > "Write `models/staging/stg_quote_events.sql` over the `raw` source. One row per distinct
 > `(CHANNEL_ID, STREAM_OFFSET)` - dedupe with QUALIFY ROW_NUMBER(). Promote the event type,
 > event version, and quote id. Standardize every event-time encoding you found in 2.1 into a
-> single `EVENT_TS_UTC`, and keep `PAYLOAD` for everything not promoted."
+> single `EVENT_TS_UTC`, add `PUBLISHED_AT` converted to UTC as `PUBLISHED_AT_UTC`, and keep
+> `PAYLOAD` for everything not promoted. Use the column names in the table above."
 
 Verify by reading: the `QUALIFY` partitions on `CHANNEL_ID, STREAM_OFFSET`, and the timestamp
 logic has a branch for every encoding you found in 2.1.
@@ -288,7 +316,7 @@ logic has a branch for every encoding you found in 2.1.
 > or OPEN; `silver_carrier_quote`, one row per carrier response, with term, the premium typed as
 > a number for every way the carriers send it, and an annualized premium;
 > `silver_quote_vehicle` and `silver_quote_driver`, one row per array element using LATERAL
-> FLATTEN. Do not carry date of birth or email. Name the columns so they match the verify queries in step 2.5."
+> FLATTEN. Do not carry date of birth or email. Use the column names in the table above."
 
 Decide your Silver materialization and say it out loud to your pair, with a reason.
 
@@ -297,19 +325,27 @@ Decide your Silver materialization and say it out loud to your pair, with a reas
 > "Add tests, using only dbt built-ins and singular SQL tests, no packages. In
 > `models/schema.yml`: `not_null` on `event_ts_utc` and `quote_id` in staging; `unique` and
 > `not_null` on `quote_id` in `silver_quote`, which is the fanout test; `accepted_values` on
-> quote status and on term; `not_null` on the typed premium; `relationships` from the vehicle and
+> `quote_status` and on `term`; `not_null` on `term_premium`; `relationships` from the vehicle and
 > driver models back to `silver_quote`. In `tests/`: one singular test that staging has exactly
 > one row per `(CHANNEL_ID, STREAM_OFFSET)`, one that RAW has no offset gaps per channel, and one
-> that no `SILVER_` table in my schema has a `DOB` or `EMAIL` column, reading
-> INFORMATION_SCHEMA."
+> that no `SILVER_` table in my schema has a column whose name contains `DOB` or `EMAIL`, or any
+> VARIANT column, reading INFORMATION_SCHEMA. That test has no `ref()`, so start it with one
+> `-- depends_on: {{ ref('...') }}` line per Silver model, or it runs before Silver exists and
+> passes on nothing."
 
-Verify by reading: every test named in the prompt exists, in `schema.yml` or `tests/`. 
+Verify by reading: every test named in the prompt exists, in `schema.yml` or `tests/`, and the
+PII test has a `depends_on` line for all four Silver models.
 
 **Step 2.4.5 - deploy and run.**
 
 > "Deploy this project from my Workspace as a dbt project object named `NORTHPOINT_SILVER` in
-> my schema, then run it with `EXECUTE DBT PROJECT` and `ARGS = 'build'`, and show me the result
-> of every model and test."
+> my schema, using `CREATE DBT PROJECT NORTHPOINT_LAB.ATTENDEE_<n>.NORTHPOINT_SILVER FROM
+> 'snow://workspace/USER$<your_user>.PUBLIC."DEFAULT$"/versions/live/northpoint_silver'`, then run
+> it with `EXECUTE DBT PROJECT` and `ARGS = 'build'`, and show me the result of every model and
+> test."
+
+If your project files are on your laptop rather than in the Workspace, tell your facilitator
+before you deploy.
 
 ```sql
 EXECUTE DBT PROJECT NORTHPOINT_LAB.ATTENDEE_<n>.NORTHPOINT_SILVER ARGS = 'build';
@@ -321,7 +357,7 @@ Then run the verify queries in step 2.5.
 
 ### Step 2.5 - Verify
 
-Run all four.
+Run all five.
 
 **1. Did the dedupe do what you think?**
 
@@ -354,6 +390,12 @@ QUALIFY STREAM_OFFSET != prev + 1;
 
 Pass criteria: **must return zero rows.** Work out for yourself why the query deduplicates first.
 
+Zero rows only proves nothing was lost in the middle of a channel: the first offset has no `prev`,
+so a lost offset 0 is invisible, and so is a lost tail. Also confirm `MIN(STREAM_OFFSET) = 0` per
+channel and that `MAX(STREAM_OFFSET)` matches the last offset per partition you found in 2.1. This
+sample has no gaps, so if you want to see the check catch one, delete a single RAW row and rerun
+it, then reload.
+
 **4. Any silent nulls?**
 
 ```sql
@@ -364,6 +406,17 @@ SELECT (SELECT COUNT_IF(EVENT_TS_UTC IS NULL) FROM STG_QUOTE_EVENTS)     AS unpa
 ```
 
 Pass criteria: all three must be zero.
+
+**5. Are the timestamps right, not just present?**
+
+```sql
+SELECT COUNT_IF(ABS(DATEDIFF('second', EVENT_TS_UTC, PUBLISHED_AT_UTC)) > 5) AS skewed_ts
+FROM STG_QUOTE_EVENTS;
+```
+
+Pass criteria: must be zero. In this sample, event time and broker time agree to the second for
+every encoding. A non-zero count usually means a zoneless timestamp was read in the session time
+zone instead of UTC; query 4 cannot catch that, because nothing is null.
 
 ### Step 2.6 - Debrief and document
 
@@ -378,10 +431,15 @@ Then document:
 
 > "From live metadata in my schema, generate `PIPELINE_DOCS.md` (executive summary,
 > source-to-target mapping per Silver object, lineage diagram, business rules including the
-> dedupe, timestamp, premium, and anonymous-applicant logic, PII inventory, refresh pattern) and
-> `ADD_COMMENTS.sql`. Then apply the comments."
+> dedupe, timestamp, premium, and anonymous-applicant logic, PII inventory, refresh pattern). Put
+> every table and column description into `models/schema.yml`, and add
+> `+persist_docs: {relation: true, columns: true}` to `dbt_project.yml`. Then redeploy and run
+> `build`."
 
-Verify: every Silver object has a table comment; the PII inventory says where `dob` and `email`
+Comments applied with `COMMENT ON` after the build do not last: every `build` recreates the Silver
+tables and drops them. Putting the descriptions in dbt makes each build reapply them.
+
+Verify: run `build` a second time, then confirm every Silver object still has a table comment; the PII inventory says where `dob` and `email`
 live and confirms they are absent from Silver; the refresh pattern section describes how the dbt project is run. Then
 read the generated docs critically: is the business-rules section correct about what your Silver
 does, or is it describing what it assumes you did?
@@ -411,7 +469,7 @@ does, or is it describing what it assumes you did?
 **Useful commands:**
 
 ```sql
-SELECT CURRENT_ORGANIZATION_NAME(), CURRENT_ACCOUNT_NAME();     -- your SDK account identifier
+SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME(); -- your SDK account identifier
 SELECT CURRENT_ROLE(), CURRENT_SCHEMA();                        -- confirm your own role and schema
 SHOW PIPES IN SCHEMA NORTHPOINT_LAB.ATTENDEE_<n>;               -- the pipe you never created
 SHOW DBT PROJECTS IN SCHEMA NORTHPOINT_LAB.ATTENDEE_<n>;        -- the dbt project object
